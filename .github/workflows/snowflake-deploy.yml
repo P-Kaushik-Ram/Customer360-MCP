@@ -1,0 +1,45 @@
+name: Deploy Semantic View & MCP Server to Snowflake
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy.sql'
+      - '.github/workflows/snowflake-deploy.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+      SNOWFLAKE_ROLE: ${{ secrets.SNOWFLAKE_ROLE }}
+      SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+      SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
+      SNOWFLAKE_SCHEMA: ${{ secrets.SNOWFLAKE_SCHEMA }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Snowflake CLI
+        uses: snowflakedb/snowflake-cli-action@v2
+        with:
+          cli-version: "3.20"
+          default-config-file-path: ""
+
+      - name: Deploy semantic view + MCP server
+        run: snow sql -f deploy.sql -x
+
+      - name: Smoke test - semantic view
+        run: |
+          snow sql -x -q "
+            SELECT * FROM SEMANTIC_VIEW(
+              CUSTOMER_360.SILVER.CUSTOMER360_SV
+              METRICS TOTAL_REVENUE
+            );
+          "
+
+      - name: Smoke test - MCP server exists
+        run: snow sql -x -q "SHOW MCP SERVERS IN SCHEMA CUSTOMER_360.SILVER;"
