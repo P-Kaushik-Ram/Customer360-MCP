@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SF_ACCOUNT   = os.environ.get("SF_ACCOUNT", "urkdocl-wj23271")
 SF_USER      = os.environ.get("SF_USER", "KAUSHIK")
-SF_PASSWORD  = os.environ.get("SF_PASSWORD", "#Kaushpass@123")
+SF_PASSWORD  = os.environ.get("SF_PASSWORD", "")
 SF_ROLE      = os.environ.get("SF_ROLE", "ACCOUNTADMIN")
 SF_WAREHOUSE = os.environ.get("SF_WAREHOUSE", "COMPUTE_WH")
 SF_DATABASE  = os.environ.get("SF_DATABASE", "CUSTOMER_360")
