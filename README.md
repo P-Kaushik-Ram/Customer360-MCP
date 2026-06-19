@@ -1,36 +1,35 @@
-# Customer360-MCP
+# Customer360 AI Data Pipeline
 
-A conversational analytics server that lets business users query enterprise customer data in plain English — no SQL required.
-
-Built on **Snowflake Cortex Analyst** and exposed via the **Model Context Protocol (MCP)**, with a REST fallback, CLI, voice interface, and web UI. Deployed via Docker with a GitHub Actions CI/CD pipeline for Snowflake.
+> End-to-end AI-powered data platform built on **AWS Bedrock**, **Snowflake**, and **GitHub Actions** — featuring a native MCP server, metadata-driven pipelines, and an autonomous AI data agent.
 
 ---
 
-## What it does
-
-Type a question like _"Which customers have the highest churn risk?"_ or _"Show me revenue by city"_ — the server translates it into SQL using Cortex Analyst, runs it against Snowflake, and returns a formatted answer.
-
-**Three ways to interact:**
-- **Web UI** (`index.html`) — browser-based chat interface
-- **CLI** (`cli.py`) — terminal client using the MCP protocol
-- **Voice CLI** (`voice_cli.py`) — speak your question, get an answer
-
----
-
-## Architecture
+## Architecture Overview
 
 ```
-User (voice / CLI / browser)
-        │
-        ▼
-  MCP Server (server.py)
-  ├── /mcp   → MCP JSON-RPC (for CLI)
-  ├── /ask   → REST endpoint (for web UI)
-  └── /health → health check
-        │
-        ▼
-  Snowflake Cortex Analyst
-  └── CUSTOMER_360.SILVER (semantic model YAML)
+┌─────────────────────────────────────────────────────────────────┐
+│                        FLOW A — Automated Trigger               │
+│                                                                  │
+│  Jira Issue → API Gateway → AWS Bedrock Agent → Lambda          │
+│       → Snowflake Cortex Analyst → Answer posted to Jira        │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                   FLOW B — Native MCP Server                     │
+│                                                                  │
+│  ask.ps1 (snow CLI) → CREATE MCP SERVER (Snowflake-native)      │
+│       → Semantic View (CUSTOMER360_SV) → Cortex Analyst         │
+│       Deployed via: GitHub Actions → snow sql -f deploy.sql     │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                  FLOW C — AI Data Agent                          │
+│                                                                  │
+│  Claude Code reads customer360_metadata.yaml                     │
+│       → Runs Bronze → Silver → Gold pipeline                     │
+│       → Data quality checks → PIPELINE_AUDIT table              │
+│       → Generates assessment_report.md                          │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -39,89 +38,163 @@ User (voice / CLI / browser)
 
 | Layer | Technology |
 |---|---|
-| NLP → SQL | Snowflake Cortex Analyst |
-| Data warehouse | Snowflake (CUSTOMER_360 DB, SILVER schema) |
-| Server | Python (stdlib `http.server`, ThreadingHTTPServer) |
-| Protocol | MCP JSON-RPC 2024-11-05 |
-| Containerization | Docker |
-| CI/CD | GitHub Actions + Snowflake CLI |
-| Frontend | HTML / JavaScript |
+| AI Agent | AWS Bedrock (Claude 3 Sonnet), Claude Code |
+| Data Warehouse | Snowflake (Data Vault 2.0) |
+| NL→SQL | Snowflake Cortex Analyst |
+| MCP Server | Snowflake-native `CREATE MCP SERVER` |
+| Semantic Layer | Snowflake Semantic View (`CUSTOMER360_SV`) |
+| Trigger | Jira Webhook → AWS API Gateway |
+| Serverless | AWS Lambda (Python) |
+| CLI Client | Snowflake CLI (`snow`) |
+| CI/CD | GitHub Actions |
+| IaC | SQL-as-code (`deploy.sql`) |
 
 ---
 
-## Getting Started
+## Data Architecture — Snowflake
 
-### Prerequisites
-- Docker
-- A Snowflake account with Cortex Analyst enabled
-- Semantic model YAML uploaded to your Snowflake stage
-
-### Run locally
-
-```bash
-docker build -t customer360-mcp .
-docker run -p 8000:8000 \
-  -e SF_ACCOUNT=your_account \
-  -e SF_USER=your_user \
-  -e SF_PASSWORD=your_password \
-  -e SF_ROLE=ACCOUNTADMIN \
-  -e SF_WAREHOUSE=COMPUTE_WH \
-  -e SF_DATABASE=CUSTOMER_360 \
-  -e SF_SCHEMA=SILVER \
-  -e SEMANTIC_MODEL_FILE=@CUSTOMER_360.BRONZE.CUSTOMER_STAGE/customer360_model.yaml \
-  customer360-mcp
+```
+Source Systems (6)
+    CRM · ERP · LOCAL · CONTRACT_MGMT · FINANCE · INTERACTIONS
+         ↓
+    BRONZE LAYER (Raw landing — 6 tables)
+         ↓
+    SILVER LAYER — Data Vault 2.0 (28 tables)
+    ├── Cleansed:  SILVER_CRM, SILVER_ERP, SILVER_LOCAL...
+    ├── Hub:       HUB_CUSTOMER (220 unique customers)
+    ├── Satellites: SAT_CRM_CUSTOMER, SAT_ERP_CUSTOMER...
+    ├── Links:     LINK_CUSTOMER_CONTRACT, LINK_CUSTOMER_REVENUE...
+    ├── KPIs:      CUSTOMER_CHURN_RISK, CUSTOMER_HEALTH_SCORE...
+    └── Audit:     PIPELINE_AUDIT (pipeline run history)
+         ↓
+    GOLD LAYER
+    └── GOLDEN_CUSTOMER → CUSTOMER360_VIEW (220 customers, 27 cols)
+         ↓
+    SEMANTIC LAYER
+    └── CUSTOMER360_SV (Snowflake Semantic View)
+         ↓
+    NATIVE MCP SERVER
+    └── CUSTOMER360_MCP (Cortex Analyst tool)
 ```
 
-### Endpoints
+**Key metrics:**
+- 220 unique customers across 3 source systems
+- 8 survivorship rules for golden record resolution
+- ₹155.3M total revenue tracked
+- Health, Churn Risk, and Renewal scores per customer
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/mcp` | POST | MCP JSON-RPC (used by CLI) |
-| `/ask` | POST | REST — send `{"question": "..."}` |
-| `/health` | GET | Health check |
+---
 
-### Example REST call
+## What This Demo Shows
 
-```bash
-curl -X POST http://localhost:8000/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Which city has the most customers?"}'
+### 1. Jira → Answer (Flow A)
+Create a Jira issue with a business question in the description. Within 30 seconds, a comment appears with the answer — pulled from live Snowflake data by an AWS Bedrock agent.
+
 ```
+Jira: "How many customers have a churn risk score above 60?"
+→ Comment: "There are 57 customers with a churn risk score above 60."
+```
+
+### 2. Natural Language Query via snow CLI (Flow B)
+```powershell
+.\ask.ps1 -Question "Show me the top 5 customers by revenue with health level"
+```
+→ Calls native Snowflake MCP server → Cortex Analyst generates SQL → `snow` executes it → real results.
+
+### 3. Autonomous Pipeline + Assessment (Flow C)
+```
+claude> Read customer360_metadata.yaml and run the full pipeline assessment
+```
+→ Claude Code reads the YAML → runs 8 pipeline stages → 5 DQ checks → populates `PIPELINE_AUDIT` in Snowflake → writes `assessment_report.md` with real findings including bugs it discovered autonomously.
+
+---
+
+## CI/CD Pipeline
+
+On every push to `main` that touches `deploy.sql`:
+
+```yaml
+GitHub Push → Install Snowflake CLI → snow sql -f deploy.sql
+           → Smoke test semantic view (TOTAL_REVENUE = $155.3M)
+           → Smoke test MCP server exists
+           → Done
+```
+
+Secrets managed in GitHub Actions — no credentials in code.
 
 ---
 
 ## Repository Structure
 
 ```
-├── server.py          # MCP + REST server (core)
-├── cli.py             # Terminal client (MCP protocol)
-├── voice_cli.py       # Voice-based query interface
-├── index.html         # Browser UI
-├── deploy.sql         # Snowflake schema setup
-├── deploy.sh          # Deployment helper script
-├── Dockerfile         # Container definition
-├── requirements.txt   # Python dependencies
-└── .github/workflows/ # CI/CD — Snowflake CLI deployment
+Customer360-MCP/
+├── server.py                    # Custom MCP server (Docker)
+├── Dockerfile                   # Container definition
+├── requirements.txt             # Python dependencies
+├── deploy.sql                   # Semantic view + MCP server DDL
+├── customer360_metadata.yaml    # Metadata-driven pipeline config
+├── assessment_report.md         # Latest pipeline assessment output
+├── ask.ps1                      # snow CLI query client
+├── cli.py                       # MCP CLI client
+├── voice_cli.py                 # Voice-enabled MCP client
+├── index.html                   # Web UI
+└── .github/
+    └── workflows/
+        ├── docker-build.yml     # Docker image CI/CD
+        └── snowflake-deploy.yml # Snowflake objects CI/CD
 ```
 
 ---
 
-## Environment Variables
+## Key Findings from Assessment
 
-| Variable | Default | Description |
-|---|---|---|
-| `SF_ACCOUNT` | `urkdocl-wj23271` | Snowflake account identifier |
-| `SF_USER` | `KAUSHIK` | Snowflake username |
-| `SF_PASSWORD` | _(set via env)_ | Snowflake password — **never hardcode** |
-| `SF_ROLE` | `ACCOUNTADMIN` | Snowflake role |
-| `SF_WAREHOUSE` | `COMPUTE_WH` | Warehouse name |
-| `SF_DATABASE` | `CUSTOMER_360` | Target database |
-| `SF_SCHEMA` | `SILVER` | Target schema |
-| `SEMANTIC_MODEL_FILE` | _(stage path)_ | Path to Cortex Analyst YAML |
+Claude Code autonomously discovered these issues during the pipeline run:
+
+1. **`COMPLETENESS_SCORE` bug** — flat value of 6 for all 220 customers, indicating broken per-row calculation in `CUSTOMER360_VIEW`
+2. **Schema drift** — `SILVER_ERP` metadata YAML describes order-grained schema but live table is customer-grained
+3. **46 unresolved cross-source conflicts** — 20 phone, 13 city, 13 pincode disagreements in the golden record
+4. **Churn score clamping** — all churned customers show exactly 100.00, suggesting hardcoded logic rather than dynamic calculation
 
 ---
 
-## Built by
+## Setup
 
-[Kaushik Ram P](https://linkedin.com/in/kaushik-ram-895b8928a) — Agentic AI Intern @ Wipro  
-Integrated M.Tech Computer Science (Data Science) — VIT Vellore
+### Prerequisites
+- AWS account with Bedrock access (us-east-1)
+- Snowflake account (Singapore/any region)
+- Snowflake CLI (`snow`) installed
+- GitHub account
+
+### Deploy Snowflake Objects
+```bash
+# Add secrets to GitHub Actions, then:
+git push  # triggers snowflake-deploy.yml automatically
+```
+
+### Run a Query
+```powershell
+.\ask.ps1 -Question "How many customers are at high churn risk?"
+```
+
+### Run Full Pipeline Assessment
+```bash
+claude  # inside project directory
+> Read customer360_metadata.yaml and run the full pipeline and assessment
+```
+
+---
+
+## About
+
+Built as a demonstration of end-to-end AI data engineering on AWS + Snowflake.
+
+**Architecture patterns demonstrated:**
+- Data Vault 2.0 (Hub/Link/Satellite)
+- Model Context Protocol (MCP) — both custom and Snowflake-native
+- Metadata-driven pipeline orchestration
+- Agentic AI for autonomous data engineering
+- SQL-as-code with CI/CD
+
+---
+
+*Built by Badri Kaushik P — VIT Vellore, B.Tech + M.Tech CS (2028)*
