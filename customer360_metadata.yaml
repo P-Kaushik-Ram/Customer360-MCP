@@ -1,0 +1,125 @@
+# Customer360 Metadata-Driven Pipeline Config
+# Single source of truth for all pipeline definitions
+
+project:
+  name: Customer360
+  database: CUSTOMER_360
+  warehouse: COMPUTE_WH
+  role: ACCOUNTADMIN
+
+audit:
+  schema: SILVER
+  table: PIPELINE_AUDIT
+  enabled: true
+
+pipeline:
+  name: customer360_full_pipeline
+  description: End-to-end pipeline from Bronze raw ingestion to Gold semantic layer
+
+  stages:
+    - name: bronze_to_silver_crm
+      source:
+        schema: BRONZE
+        table: CRM_RAW
+      target:
+        schema: SILVER
+        table: SILVER_CRM
+      transformations:
+        - UPPER(CUSTOMER_ID) AS CUSTOMER_ID
+        - INITCAP(CUSTOMER_NAME) AS CUSTOMER_NAME
+        - LOWER(EMAIL) AS EMAIL
+        - INITCAP(CITY) AS CITY
+        - UPPER(LEAD_STATUS) AS LEAD_STATUS
+        - 'CRM' AS SOURCE_SYSTEM
+        - MD5(CUSTOMER_ID) AS HASH_KEY
+        - CURRENT_TIMESTAMP() AS LOAD_TIMESTAMP
+      key_column: CUSTOMER_ID
+
+    - name: bronze_to_silver_erp
+      source:
+        schema: BRONZE
+        table: ERP_RAW
+      target:
+        schema: SILVER
+        table: SILVER_ERP
+      transformations:
+        - UPPER(CUSTOMER_ID) AS CUSTOMER_ID
+        - UPPER(ORDER_ID) AS ORDER_ID
+        - INITCAP(PRODUCT) AS PRODUCT
+        - AMOUNT::NUMBER AS AMOUNT
+        - UPPER(PAYMENT_STATUS) AS PAYMENT_STATUS
+        - 'ERP' AS SOURCE_SYSTEM
+        - MD5(ORDER_ID) AS HASH_KEY
+        - CURRENT_TIMESTAMP() AS LOAD_TIMESTAMP
+      key_column: ORDER_ID
+
+    - name: silver_to_gold_hub
+      source:
+        schema: SILVER
+        table: SILVER_CRM
+      target:
+        schema: SILVER
+        table: HUB_CUSTOMER
+      description: Merge all unique customers into the Hub
+      key_column: CUSTOMER_ID
+
+    - name: refresh_kpis
+      type: refresh
+      targets:
+        - schema: SILVER
+          table: CUSTOMER_CHURN_RISK
+        - schema: SILVER
+          table: CUSTOMER_HEALTH_SCORE
+        - schema: SILVER
+          table: CUSTOMER_RENEWAL_SCORE
+        - schema: SILVER
+          table: CUSTOMER_REVENUE_METRICS
+
+    - name: refresh_golden_layer
+      type: refresh
+      targets:
+        - schema: SILVER
+          table: GOLDEN_CUSTOMER
+
+data_quality:
+  rules:
+    - table: SILVER_CRM
+      checks:
+        - name: no_null_customer_id
+          sql: "SELECT COUNT(*) FROM CUSTOMER_360.SILVER.SILVER_CRM WHERE CUSTOMER_ID IS NULL"
+          expect: 0
+        - name: no_duplicate_customer_id
+          sql: "SELECT COUNT(*) - COUNT(DISTINCT CUSTOMER_ID) FROM CUSTOMER_360.SILVER.SILVER_CRM"
+          expect: 0
+        - name: valid_email_format
+          sql: "SELECT COUNT(*) FROM CUSTOMER_360.SILVER.SILVER_CRM WHERE EMAIL NOT LIKE '%@%.%'"
+          expect: 0
+
+    - table: SILVER_ERP
+      checks:
+        - name: no_null_order_id
+          sql: "SELECT COUNT(*) FROM CUSTOMER_360.SILVER.SILVER_ERP WHERE ORDER_ID IS NULL"
+          expect: 0
+        - name: positive_amounts
+          sql: "SELECT COUNT(*) FROM CUSTOMER_360.SILVER.SILVER_ERP WHERE AMOUNT <= 0"
+          expect: 0
+
+assessment:
+  kpi_query: |
+    SELECT
+      HEALTH_LEVEL,
+      CHURN_RISK_LEVEL,
+      COUNT(*) as customers,
+      SUM(TOTAL_REVENUE) as revenue,
+      AVG(HEALTH_SCORE) as avg_health,
+      AVG(CHURN_RISK_SCORE) as avg_churn
+    FROM CUSTOMER_360.SILVER.CUSTOMER360_VIEW
+    GROUP BY HEALTH_LEVEL, CHURN_RISK_LEVEL
+    ORDER BY revenue DESC
+
+  conflict_query: |
+    SELECT
+      SUM(CASE WHEN PHONE_CONFLICT THEN 1 ELSE 0 END) as phone_conflicts,
+      SUM(CASE WHEN CITY_CONFLICT THEN 1 ELSE 0 END) as city_conflicts,
+      SUM(CASE WHEN EMAIL_CONFLICT THEN 1 ELSE 0 END) as email_conflicts
+    FROM CUSTOMER_360.SILVER.CUSTOMER360_VIEW
